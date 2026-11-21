@@ -1,342 +1,186 @@
-/**
- * ============================================================================
- * UNIVERSIDAD CENTRAL DEL ESTE (UCE) - RECINTO PUNTA CANA
- * ASIGNATURA: COMPUTACION GRAFICA I (ISW-411)
- * PROFESOR:   ING. RICHARD A. JIMENEZ RIJO
- * ESTUDIANTE: JULIAN VAZQUEZ (MATRICULA: 2023-0715)
- * 
- * CASO 2: SIMULACION CIENTIFICA - PARTICULAS DE UN GAS EN UN CONTENEDOR 2D
- * ============================================================================
- * Descripcion:
- * Animacion grafica de 20 particulas de gas confinadas dentro de un recipiente
- * hermetico rectangular. Cada particula se desplaza con velocidad uniforme y
- * experimenta rebotes elasticos perfectos al colisionar con las 4 paredes.
- * 
- * Conceptos clave aplicados:
- * - Ciclo de animacion a ~60 FPS mediante glutTimerFunc.
- * - Primitiva GL_TRIANGLE_FAN para renderizar circulos suavizados.
- * - Deteccion de colisiones contra bordes tomando en cuenta el radio (r).
- * - Mapeo de color dinamico segun la rapidez (energia cinetica termica).
- * - Sistema ortografico 2D configurado con gluOrtho2D.
- * ============================================================================
- */
-
 #include <GL/glut.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <math.h>
 #include <time.h>
 
-#ifndef M_PI
-#define M_PI 3.14159265358979323846
-#endif
-
 #define NUM_PARTICULAS 20
-#define SEGMENTOS_CIRCULO 28
 
-// Limites geometricos del contenedor en el mundo virtual
-#define CONTENEDOR_X_MIN 20.0f
-#define CONTENEDOR_X_MAX 180.0f
-#define CONTENEDOR_Y_MIN 20.0f
-#define CONTENEDOR_Y_MAX 140.0f
+// Limites de la caja contenedora
+#define MIN_X 20.0f
+#define MAX_X 180.0f
+#define MIN_Y 20.0f
+#define MAX_Y 140.0f
 
-// Estructura que almacena el estado fisico de cada particula
+// Estructura para cada particula de gas
 typedef struct {
-    float x;        // Posicion en X
-    float y;        // Posicion en Y
-    float vx;       // Componente horizontal de velocidad
-    float vy;       // Componente vertical de velocidad
-    float radio;    // Radio de la particula
-    float r, g, b;  // Color RGB (asociado a la rapidez)
+    float x, y;     // Posicion
+    float vx, vy;   // Velocidad
+    float radio;    // Radio
+    float r, g, b;  // Color
 } Particula;
 
-// Arreglo global de particulas y variables de control de simulacion
-static Particula particulas[NUM_PARTICULAS];
-static int simulacionPausada = 0;
-static float factorVelocidad = 1.0f;
-static unsigned long contadorRebotes = 0;
+Particula particulas[NUM_PARTICULAS];
 
-/**
- * Dibuja una cadena de texto en pantalla en la coordenada (x, y).
- */
-void dibujarTexto(float x, float y, const char *texto) {
-    glRasterPos2f(x, y);
-    for (int i = 0; texto[i] != '\0'; i++) {
-        glutBitmapCharacter(GLUT_BITMAP_HELVETICA_12, texto[i]);
-    }
-}
-
-/**
- * Actualiza el color de la particula segun su rapidez escalar (v = sqrt(vx^2 + vy^2)).
- * Simula el concepto fisico de temperatura / energia cinetica:
- * - Rapidez baja  (< 0.7): Azul / Cian (Particulas frias)
- * - Rapidez media (0.7 - 1.2): Amarillo / Ambar (Particulas templadas)
- * - Rapidez alta  (> 1.2): Rojo / Fucsia (Particulas calientes)
- */
-void actualizarColorPorRapidez(Particula *p) {
-    float rapidez = sqrtf(p->vx * p->vx + p->vy * p->vy);
-    
-    if (rapidez < 0.75f) {
-        // Azul celeste / frio
-        p->r = 0.20f; p->g = 0.70f; p->b = 1.00f;
-    } else if (rapidez < 1.15f) {
-        // Amarillo / templado
-        p->r = 0.98f; p->g = 0.82f; p->b = 0.15f;
-    } else {
-        // Rojo carmesi / caliente
-        p->r = 0.95f; p->g = 0.22f; p->b = 0.25f;
-    }
-}
-
-/**
- * Genera un numero flotante aleatorio en el rango [min, max].
- */
-float randomFloat(float min, float max) {
+// Genera un numero flotante aleatorio entre min y max
+float numAleatorio(float min, float max) {
     return min + ((float)rand() / (float)RAND_MAX) * (max - min);
 }
 
-/**
- * Inicializa las posiciones, velocidades y radios de las particulas de gas.
- */
-void inicializarParticulas(void) {
+// Asigna color a la particula segun su rapidez (azul=lenta, roja=rapida)
+void actualizarColor(Particula *p) {
+    float rapidez = sqrtf(p->vx * p->vx + p->vy * p->vy);
+    if (rapidez < 0.75f) {
+        p->r = 0.2f; p->g = 0.7f; p->b = 1.0f; // Azul/Cian
+    } else if (rapidez < 1.15f) {
+        p->r = 0.95f; p->g = 0.8f; p->b = 0.2f; // Amarillo
+    } else {
+        p->r = 0.95f; p->g = 0.2f; p->b = 0.2f; // Rojo
+    }
+}
+
+// Inicializa las particulas con datos aleatorios
+void inicializar(void) {
     srand((unsigned int)time(NULL));
 
     for (int i = 0; i < NUM_PARTICULAS; i++) {
         particulas[i].radio = 3.0f;
+        // Posicion dentro de los limites
+        particulas[i].x = numAleatorio(MIN_X + 5.0f, MAX_X - 5.0f);
+        particulas[i].y = numAleatorio(MIN_Y + 5.0f, MAX_Y - 5.0f);
 
-        // Ubicacion inicial asegurando que queden completamente dentro del contenedor
-        particulas[i].x = randomFloat(CONTENEDOR_X_MIN + particulas[i].radio + 2.0f,
-                                      CONTENEDOR_X_MAX - particulas[i].radio - 2.0f);
-        particulas[i].y = randomFloat(CONTENEDOR_Y_MIN + particulas[i].radio + 2.0f,
-                                      CONTENEDOR_Y_MAX - particulas[i].radio - 2.0f);
+        // Velocidad aleatoria (evitando que sea 0)
+        particulas[i].vx = numAleatorio(-1.0f, 1.0f);
+        particulas[i].vy = numAleatorio(-1.0f, 1.0f);
+        if (fabsf(particulas[i].vx) < 0.2f) particulas[i].vx = 0.5f;
+        if (fabsf(particulas[i].vy) < 0.2f) particulas[i].vy = 0.5f;
 
-        // Velocidades aleatorias en ambas direcciones (-1.2 a +1.2)
-        float vx = randomFloat(-1.1f, 1.1f);
-        float vy = randomFloat(-1.1f, 1.1f);
-        
-        // Evitar particulas estaticas
-        if (fabsf(vx) < 0.25f) vx = (vx < 0) ? -0.5f : 0.5f;
-        if (fabsf(vy) < 0.25f) vy = (vy < 0) ? -0.5f : 0.5f;
-
-        particulas[i].vx = vx;
-        particulas[i].vy = vy;
-
-        actualizarColorPorRapidez(&particulas[i]);
+        actualizarColor(&particulas[i]);
     }
-    contadorRebotes = 0;
 }
 
-/**
- * Dibuja un circulo solido utilizando la primitiva GL_TRIANGLE_FAN.
- * El primer vertice es el centro; los siguientes forman los triangulos que
- * completan los 360 grados de la circunferencia.
- */
-void dibujarParticulaCirculo(float cx, float cy, float radio, int segmentos) {
+// Dibuja un circulo usando abanico de triangulos
+void dibujarCirculo(float cx, float cy, float radio) {
     glBegin(GL_TRIANGLE_FAN);
-    glVertex2f(cx, cy); // Vertice central
-    for (int i = 0; i <= segmentos; i++) {
-        float angulo = (float)i * (2.0f * (float)M_PI / (float)segmentos);
-        float px = cx + cosf(angulo) * radio;
-        float py = cy + sinf(angulo) * radio;
-        glVertex2f(px, py);
+        glVertex2f(cx, cy); // Centro
+        for (int i = 0; i <= 20; i++) {
+            float angulo = (float)i * (2.0f * 3.14159f / 20.0f);
+            glVertex2f(cx + cosf(angulo) * radio, cy + sinf(angulo) * radio);
+        }
+    glEnd();
+}
+
+// Dibuja texto en pantalla
+void dibujarTexto(float x, float y, const char *texto) {
+    glRasterPos2f(x, y);
+    while (*texto) {
+        glutBitmapCharacter(GLUT_BITMAP_HELVETICA_12, *texto);
+        texto++;
     }
-    glEnd();
 }
 
-/**
- * Dibuja el contenedor cerrado y los paneles informativos del laboratorio.
- */
-void dibujarContenedorYPaneles(void) {
-    // 1. Fondo interior del contenedor (recipiente de gas)
-    glColor3f(0.07f, 0.10f, 0.16f);
-    glBegin(GL_QUADS);
-    glVertex2f(CONTENEDOR_X_MIN, CONTENEDOR_Y_MIN);
-    glVertex2f(CONTENEDOR_X_MAX, CONTENEDOR_Y_MIN);
-    glVertex2f(CONTENEDOR_X_MAX, CONTENEDOR_Y_MAX);
-    glVertex2f(CONTENEDOR_X_MIN, CONTENEDOR_Y_MAX);
-    glEnd();
-
-    // 2. Paredes solidas del contenedor hermetico (borde cian neon)
-    glLineWidth(3.0f);
-    glColor3f(0.20f, 0.65f, 0.90f);
-    glBegin(GL_LINE_LOOP);
-    glVertex2f(CONTENEDOR_X_MIN, CONTENEDOR_Y_MIN);
-    glVertex2f(CONTENEDOR_X_MAX, CONTENEDOR_Y_MIN);
-    glVertex2f(CONTENEDOR_X_MAX, CONTENEDOR_Y_MAX);
-    glVertex2f(CONTENEDOR_X_MIN, CONTENEDOR_Y_MAX);
-    glEnd();
-    glLineWidth(1.0f);
-
-    // 3. Encabezado institucional
-    glColor3f(0.95f, 0.95f, 0.95f);
-    dibujarTexto(20.0f, 152.0f, "UCE - COMPUTACION GRAFICA I  |  CASO 2: SIMULACION DE GAS IDEAL 2D");
-
-    // 4. Panel de telemetria en tiempo real
-    char infoBuffer[128];
-    sprintf(infoBuffer, "Particulas: %d  |  Rebotes: %lu  |  Velocidad: %.1fx  |  Estado: %s",
-            NUM_PARTICULAS, contadorRebotes, factorVelocidad,
-            simulacionPausada ? "[PAUSADO]" : "[EN EJECUCION]");
-    glColor3f(0.80f, 0.85f, 0.90f);
-    dibujarTexto(20.0f, 143.0f, infoBuffer);
-
-    // 5. Leyenda termica inferior
-    glColor3f(0.20f, 0.70f, 1.00f);
-    dibujarParticulaCirculo(25.0f, 10.0f, 2.5f, 16);
-    glColor3f(0.75f, 0.75f, 0.75f);
-    dibujarTexto(30.0f, 9.0f, "Baja rapidez (Fria)");
-
-    glColor3f(0.98f, 0.82f, 0.15f);
-    dibujarParticulaCirculo(80.0f, 10.0f, 2.5f, 16);
-    glColor3f(0.75f, 0.75f, 0.75f);
-    dibujarTexto(85.0f, 9.0f, "Media rapidez");
-
-    glColor3f(0.95f, 0.22f, 0.25f);
-    dibujarParticulaCirculo(130.0f, 10.0f, 2.5f, 16);
-    glColor3f(0.75f, 0.75f, 0.75f);
-    dibujarTexto(135.0f, 9.0f, "Alta rapidez (Caliente)");
-}
-
-/**
- * Funcion display: renderiza la escena en cada fotograma.
- */
+// Dibuja la escena: contenedor y particulas
 void display(void) {
     glClear(GL_COLOR_BUFFER_BIT);
 
-    // Dibujar el contenedor y textos
-    dibujarContenedorYPaneles();
+    // Fondo del contenedor
+    glColor3f(0.08f, 0.1f, 0.15f);
+    glBegin(GL_QUADS);
+        glVertex2f(MIN_X, MIN_Y);
+        glVertex2f(MAX_X, MIN_Y);
+        glVertex2f(MAX_X, MAX_Y);
+        glVertex2f(MIN_X, MAX_Y);
+    glEnd();
 
-    // Dibujar cada una de las particulas como circulos usando GL_TRIANGLE_FAN
+    // Paredes del contenedor
+    glColor3f(0.3f, 0.7f, 0.9f);
+    glLineWidth(2.5f);
+    glBegin(GL_LINE_LOOP);
+        glVertex2f(MIN_X, MIN_Y);
+        glVertex2f(MAX_X, MIN_Y);
+        glVertex2f(MAX_X, MAX_Y);
+        glVertex2f(MIN_X, MAX_Y);
+    glEnd();
+
+    // Dibujar cada particula
     for (int i = 0; i < NUM_PARTICULAS; i++) {
         glColor3f(particulas[i].r, particulas[i].g, particulas[i].b);
-        dibujarParticulaCirculo(particulas[i].x, particulas[i].y,
-                                particulas[i].radio, SEGMENTOS_CIRCULO);
-
-        // Nucleo brillante decorativo para sensacion de esfera/atomo
-        glColor3f(1.0f, 1.0f, 1.0f);
-        dibujarParticulaCirculo(particulas[i].x - particulas[i].radio * 0.25f,
-                                particulas[i].y + particulas[i].radio * 0.25f,
-                                particulas[i].radio * 0.35f, 12);
+        dibujarCirculo(particulas[i].x, particulas[i].y, particulas[i].radio);
     }
+
+    // Titulo e informacion
+    glColor3f(0.9f, 0.9f, 0.9f);
+    dibujarTexto(MIN_X, 150.0f, "Simulacion de Gas en Contenedor 2D - Caso 2");
+    glColor3f(0.6f, 0.7f, 0.8f);
+    dibujarTexto(MIN_X, 143.0f, "Particulas: 20  |  Animacion continua con rebotes");
 
     glutSwapBuffers();
 }
 
-/**
- * Funcion timer: actualiza las posiciones fisicas y gestiona los rebotes a ~60 FPS.
- */
-void actualizar(int valor) {
-    (void)valor;
+// Actualiza las posiciones y calcula los rebotes con las paredes
+void timer(int v) {
+    (void)v;
 
-    if (!simulacionPausada) {
-        for (int i = 0; i < NUM_PARTICULAS; i++) {
-            // 1. Integracion de posicion: x = x + vx * dt
-            particulas[i].x += particulas[i].vx * factorVelocidad;
-            particulas[i].y += particulas[i].vy * factorVelocidad;
+    for (int i = 0; i < NUM_PARTICULAS; i++) {
+        // Mueve la particula
+        particulas[i].x += particulas[i].vx;
+        particulas[i].y += particulas[i].vy;
 
-            // 2. Deteccion de colision con las paredes considerando el RADIO (r):
-            // Pared izquierda:
-            if (particulas[i].x - particulas[i].radio <= CONTENEDOR_X_MIN) {
-                particulas[i].x = CONTENEDOR_X_MIN + particulas[i].radio;
-                particulas[i].vx = -particulas[i].vx; // Inversion elastica
-                contadorRebotes++;
-            }
-            // Pared derecha:
-            if (particulas[i].x + particulas[i].radio >= CONTENEDOR_X_MAX) {
-                particulas[i].x = CONTENEDOR_X_MAX - particulas[i].radio;
-                particulas[i].vx = -particulas[i].vx;
-                contadorRebotes++;
-            }
-            // Pared inferior:
-            if (particulas[i].y - particulas[i].radio <= CONTENEDOR_Y_MIN) {
-                particulas[i].y = CONTENEDOR_Y_MIN + particulas[i].radio;
-                particulas[i].vy = -particulas[i].vy;
-                contadorRebotes++;
-            }
-            // Pared superior:
-            if (particulas[i].y + particulas[i].radio >= CONTENEDOR_Y_MAX) {
-                particulas[i].y = CONTENEDOR_Y_MAX - particulas[i].radio;
-                particulas[i].vy = -particulas[i].vy;
-                contadorRebotes++;
-            }
-
-            actualizarColorPorRapidez(&particulas[i]);
+        // Rebote en pared izquierda
+        if (particulas[i].x - particulas[i].radio <= MIN_X) {
+            particulas[i].x = MIN_X + particulas[i].radio;
+            particulas[i].vx = -particulas[i].vx;
         }
+        // Rebote en pared derecha
+        if (particulas[i].x + particulas[i].radio >= MAX_X) {
+            particulas[i].x = MAX_X - particulas[i].radio;
+            particulas[i].vx = -particulas[i].vx;
+        }
+        // Rebote en pared inferior
+        if (particulas[i].y - particulas[i].radio <= MIN_Y) {
+            particulas[i].y = MIN_Y + particulas[i].radio;
+            particulas[i].vy = -particulas[i].vy;
+        }
+        // Rebote en pared superior
+        if (particulas[i].y + particulas[i].radio >= MAX_Y) {
+            particulas[i].y = MAX_Y - particulas[i].radio;
+            particulas[i].vy = -particulas[i].vy;
+        }
+
+        actualizarColor(&particulas[i]);
     }
 
-    // Solicitar redibujado de la escena
     glutPostRedisplay();
-
-    // Programar siguiente cuadro a 16 milisegundos (~60 FPS)
-    glutTimerFunc(16, actualizar, 0);
+    glutTimerFunc(16, timer, 0); // Vuelve a llamar la funcion cada 16ms (~60 FPS)
 }
 
-/**
- * Control interactivo por teclado.
- */
-void teclado(unsigned char tecla, int x, int y) {
-    (void)x; (void)y;
-    switch (tecla) {
-        case ' ': // Pausar o reanudar
-            simulacionPausada = !simulacionPausada;
-            break;
-        case '+': // Incrementar rapidez
-        case '=':
-            if (factorVelocidad < 3.0f) factorVelocidad += 0.2f;
-            break;
-        case '-': // Disminuir rapidez
-        case '_':
-            if (factorVelocidad > 0.4f) factorVelocidad -= 0.2f;
-            break;
-        case 'r': // Reiniciar posiciones
-        case 'R':
-            inicializarParticulas();
-            break;
-        case 27: // Tecla ESC para salir
-            exit(0);
-            break;
-    }
-}
-
-/**
- * Ajuste del viewport y sistema de coordenadas al redimensionar la ventana.
- */
+// Configura el sistema de coordenadas de la ventana
 void reshape(int ancho, int alto) {
     if (alto == 0) alto = 1;
     glViewport(0, 0, ancho, alto);
 
     glMatrixMode(GL_PROJECTION);
     glLoadIdentity();
-    // Mundo virtual de 0 a 200 en X y 0 a 160 en Y
     gluOrtho2D(0.0, 200.0, 0.0, 160.0);
 
     glMatrixMode(GL_MODELVIEW);
     glLoadIdentity();
 }
 
-/**
- * Configuracion inicial del entorno OpenGL.
- */
-void inicializarOpenGL(void) {
-    // Fondo exterior gris oscuro
-    glClearColor(0.03f, 0.04f, 0.06f, 1.0f);
-    glEnable(GL_BLEND);
-    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-}
-
 int main(int argc, char **argv) {
     glutInit(&argc, argv);
     glutInitDisplayMode(GLUT_DOUBLE | GLUT_RGB);
-    glutInitWindowSize(850, 650);
-    glutInitWindowPosition(120, 80);
-    glutCreateWindow("Caso 2: Simulador de Particulas en Contenedor - Julian Vazquez 2023-0715");
+    glutInitWindowSize(800, 600);
+    glutInitWindowPosition(150, 100);
+    glutCreateWindow("Caso 2 - Particulas de Gas en Contenedor");
 
-    inicializarOpenGL();
-    inicializarParticulas();
+    glClearColor(0.04f, 0.05f, 0.08f, 1.0f);
+
+    inicializar();
 
     glutDisplayFunc(display);
     glutReshapeFunc(reshape);
-    glutKeyboardFunc(teclado);
-    glutTimerFunc(16, actualizar, 0);
+    glutTimerFunc(16, timer, 0);
 
     glutMainLoop();
     return 0;
